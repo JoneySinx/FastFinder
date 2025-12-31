@@ -236,7 +236,7 @@ async def get_search_results(
     return result
 
 # =====================================================
-# 🗑 DELETE FILES
+# 🗑 DELETE FILES BY QUERY
 # =====================================================
 async def delete_files(query: str) -> int:
     """Delete files matching query"""
@@ -256,6 +256,84 @@ async def delete_files(query: str) -> int:
     
     except Exception as e:
         logger.error(f"Delete error: {e}")
+        return 0
+
+# =====================================================
+# 🗑 DELETE ALL FILES (DANGEROUS!)
+# =====================================================
+async def delete_all_files() -> int:
+    """
+    Delete ALL files from database
+    ⚠️ WARNING: This will delete EVERYTHING!
+    Returns: Number of files deleted
+    """
+    try:
+        # Delete all documents from collection
+        res = collection.delete_many({})
+        
+        # Clear cache after deletion
+        cache_clear()
+        
+        deleted_count = res.deleted_count
+        logger.warning(f"⚠️ DELETED ALL FILES: {deleted_count} files removed!")
+        
+        return deleted_count
+    
+    except Exception as e:
+        logger.error(f"❌ Delete all files error: {e}")
+        return 0
+
+# =====================================================
+# 🗑 DELETE FILE BY ID
+# =====================================================
+async def delete_file_by_id(file_id: str) -> bool:
+    """
+    Delete single file by its ID
+    Returns: True if deleted, False otherwise
+    """
+    if not file_id:
+        return False
+    
+    try:
+        res = collection.delete_one({"_id": file_id})
+        
+        if res.deleted_count > 0:
+            # Clear cache after deletion
+            cache_clear()
+            logger.info(f"✅ File deleted: {file_id}")
+            return True
+        
+        return False
+    
+    except Exception as e:
+        logger.error(f"❌ Delete file by ID error: {e}")
+        return False
+
+# =====================================================
+# 🗑 DELETE BY QUALITY
+# =====================================================
+async def delete_by_quality(quality: str) -> int:
+    """
+    Delete all files of specific quality
+    Example: delete_by_quality("480p")
+    Returns: Number of files deleted
+    """
+    if not quality:
+        return 0
+    
+    try:
+        res = collection.delete_many({"quality": quality})
+        
+        # Clear cache after deletion
+        cache_clear()
+        
+        deleted_count = res.deleted_count
+        logger.info(f"✅ Deleted {deleted_count} files with quality: {quality}")
+        
+        return deleted_count
+    
+    except Exception as e:
+        logger.error(f"❌ Delete by quality error: {e}")
         return 0
 
 # =====================================================
