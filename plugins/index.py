@@ -15,7 +15,7 @@ from utils import get_readable_time
 # =====================================================
 LOCK = asyncio.Lock()
 CANCEL = False
-WAITING_SKIP = {} 
+# WAITING_SKIP हटा दिया गया है क्योंकि अब इसकी जरूरत नहीं है
 
 # =====================================================
 # RESUME DB
@@ -55,15 +55,11 @@ async def send_log(bot, text):
 
 # =====================================================
 # ENTRY POINT
-# forward / link → index
+# forward / link → DIRECT CONFIRMATION
 # =====================================================
 @Client.on_message(filters.private & filters.user(ADMINS) & filters.incoming)
 async def start_index(bot, message):
     global CANCEL
-
-    # अगर skip wait चल रहा है तो ignore
-    if message.from_user.id in WAITING_SKIP:
-        return
 
     if LOCK.locked():
         return await message.reply("⏳ Indexing already running")
@@ -91,54 +87,26 @@ async def start_index(bot, message):
     except Exception as e:
         return await message.reply(f"❌ Error: `{e}`")
 
-    # ---- ASK SKIP (STATE SET) ----
-    ask = await message.reply("⏩ Send skip message number (0 for none)")
-    WAITING_SKIP[message.from_user.id] = {
-        "chat_id": chat_id,
-        "last_msg_id": last_msg_id,
-        "title": chat.title,
-        "ask_id": ask.id
-    }
-    return
-
-# =====================================================
-# HANDLE SKIP INPUT
-# =====================================================
-@Client.on_message(filters.private & filters.user(ADMINS) & filters.text)
-async def handle_skip(bot, message):
-    uid = message.from_user.id
-    if uid not in WAITING_SKIP:
-        return
-
-    try:
-        skip = int(message.text)
-    except:
-        err = await message.reply("❌ Skip must be a number")
-        await asyncio.sleep(2)
-        await err.delete()
-        return
-
-    data = WAITING_SKIP.pop(uid)
-
-    try:
-        await bot.delete_messages(message.chat.id, data["ask_id"])
-    except:
-        pass
-
+    # ---- DIRECT BUTTON (NO SKIP ASK) ----
+    # यहाँ Skip को डिफ़ॉल्ट 0 सेट कर दिया है
+    skip = 0 
+    
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton(
-            "✅ START",
-            callback_data=f"idx#start#{data['chat_id']}#{data['last_msg_id']}#{skip}"
+            "✅ START INDEXING",
+            callback_data=f"idx#start#{chat_id}#{last_msg_id}#{skip}"
         )],
         [InlineKeyboardButton("❌ CANCEL", callback_data="idx#close")]
     ])
 
     await message.reply(
-        f"📢 **Channel:** `{data['title']}`\n"
-        f"🆔 **ID:** `{data['chat_id']}`\n"
-        f"📊 **Last Message:** `{data['last_msg_id']}`",
+        f"📢 **Channel:** `{chat.title}`\n"
+        f"🆔 **ID:** `{chat_id}`\n"
+        f"📊 **Last Message:** `{last_msg_id}`",
         reply_markup=btn
     )
+
+# Note: handle_skip फंक्शन पूरी तरह हटा दिया गया है
 
 # =====================================================
 # CALLBACK
@@ -168,7 +136,7 @@ async def index_callback(bot, query):
         )
 
 # =====================================================
-# CORE INDEX LOOP (FIXED & OPTIMIZED)
+# CORE INDEX LOOP
 # =====================================================
 async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
     global CANCEL
@@ -177,15 +145,13 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
     saved = dup = err = nomedia = 0
     processed = 0
 
-    # 🔥 FIX 1: पुराने Resume ID को "STOP POINT" बनाओ
+    # Resume Logic
     old_resume_id = get_resume(chat_id)
     stop_id = old_resume_id if old_resume_id else 0
     
-    # 🔥 FIX 2: स्कैनिंग हमेशा लेटेस्ट मैसेज से शुरू करो
     current_id = last_msg_id - skip
 
     try:
-        # 🔥 FIX 3: लूप तब तक चलाओ जब तक पुराने स्टॉप पॉइंट तक न पहुंच जाओ
         while current_id > stop_id:
             if CANCEL:
                 break
@@ -196,13 +162,12 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
                 await asyncio.sleep(e.value)
                 continue
             except Exception:
-                # अगर मैसेज डिलीटेड है तो स्किप
                 current_id -= 1
                 continue
 
             processed += 1
 
-            # Status update (हर 50 msg पर)
+            # Status Update (Every 50 msgs)
             if processed % 50 == 0:
                 elapsed = time.time() - start_time
                 speed = processed / elapsed if elapsed else 0
@@ -222,7 +187,7 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
                 except MessageNotModified:
                     pass
 
-            # Media Validation
+            # Validate Media
             if not msg or not msg.media:
                 nomedia += 1
                 current_id -= 1
@@ -251,11 +216,8 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
             else:
                 err += 1
 
-            # अगला मैसेज चेक करो (Descending Order)
             current_id -= 1
         
-        # 🔥 FIX 4: जब पूरा हो जाए, तो Resume ID को सबसे हाईएस्ट ID (last_msg_id) पर सेट करो
-        # ताकि अगली बार बोट को पता हो कि यहाँ तक स्कैन हो चुका है।
         if not CANCEL:
             set_resume(chat_id, last_msg_id)
 
@@ -265,7 +227,6 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
 
     total_time = get_readable_time(time.time() - start_time)
 
-    # ---- ADMIN CHAT (AUTO DELETE) ----
     final_msg = await status.edit(
         f"✅ **Index Completed**\n\n"
         f"📢 `{channel_title}`\n"
@@ -275,7 +236,6 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
     )
     asyncio.create_task(auto_delete(bot, final_msg.chat.id, final_msg.id, 120))
 
-    # ---- PERMANENT LOG CHANNEL ----
     await send_log(
         bot,
         "📊 **Index Report**\n\n"
